@@ -1,0 +1,36 @@
+{
+  "//": "coc.nvim 配置，会被一键脚本复制到 ~/.vim/coc-settings.json",
+
+  "clangd.path": "clangd",
+  "clangd.arguments": [
+    "--background-index",
+    "--clang-tidy",
+    "--header-insertion=iwyu",
+    "--completion-style=detailed",
+    "--function-arg-placeholders",
+    "--pch-storage=memory"
+  ],
+  "clangd.fallbackFlags": [
+    "-std=c++17",
+    "-x",
+    "cuda",
+    "--cuda-gpu-arch=sm_75"
+  ],
+
+  "python.linting.enabled": true,
+  "pyright.inlayHints.functionReturnTypes": true,
+  "pyright.inlayHints.variableTypes": true,
+
+  "suggest.noselect": false,
+  "suggest.enablePreselect": true,
+  "diagnostic.virtualText": true,
+  "diagnostic.virtualTextCurrentLineOnly": false,
+  "diagnostic.errorSign": "✘",
+  "diagnostic.warningSign": "⚠",
+  "diagnostic.infoSign": "i",
+  "diagnostic.checkCurrentLine": true,
+
+  "coc.preferences.formatOnSave": false,
+  "coc.preferences.extensionUpdateCheck": "weekly",
+  "snippets.ultisnips.enable": true
+}
