@@ -243,6 +243,21 @@ A: 直接看 `~/.vimrc`，里面每个映射都有中文注释。
 **Q: 提示需要 node？**
 A: coc.nvim 依赖 Node.js。确认 `node --version` 可用（脚本会自动装）。
 
+**Q: 机器上只有 root、没有 `sudo` 命令（常见于 Docker 容器）？**
+A: 直接跑 `bash install.sh` 即可。脚本会自动检测权限：
+- 你就是 **root** → 直接安装，不调用 sudo；
+- 普通用户 + 有 sudo → 用 sudo；
+- 既非 root 又无 sudo → 自动降级，若有 conda 则用 conda 装依赖。
+
+支持的包管理器：apt / dnf / yum / pacman / apk(Alpine) / zypper。
+
+**Q: 公司服务器既没 root 也没 sudo，怎么装依赖？**
+A: 推荐用 **conda**（不需要 root）：
+```bash
+conda install -c conda-forge clangd nodejs ripgrep fzf
+```
+装好后再跑 `bash install.sh` 部署配置即可。脚本检测到 conda 也会自动这么做。
+
 ---
 
 ## 8. 卸载 / 恢复

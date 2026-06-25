@@ -50,17 +50,64 @@ install_mac_deps() {
   fi
 }
 
-install_linux_deps() {
-  if command -v apt-get >/dev/null 2>&1; then
-    info "通过 apt 安装依赖 (需要 sudo)"
-    sudo apt-get update -qq
-    sudo apt-get install -y git curl build-essential clangd ripgrep fzf
-    # node: 用 nodesource 或系统包
-    command -v node >/dev/null 2>&1 || sudo apt-get install -y nodejs npm
-  elif command -v dnf >/dev/null 2>&1; then
-    sudo dnf install -y git curl clang-tools-extra ripgrep fzf nodejs npm
+# 决定如何获取 root 权限:
+#   - 已经是 root (id=0)      -> 不需要任何前缀，直接装
+#   - 普通用户且有 sudo       -> 用 sudo
+#   - 普通用户且无 sudo       -> 无法装系统包，返回失败让上层走降级方案
+SUDO=""
+detect_privilege() {
+  if [ "$(id -u)" -eq 0 ]; then
+    SUDO=""                       # 你就是 root，无需 sudo
+    info "当前是 root 用户，直接安装系统包"
+  elif command -v sudo >/dev/null 2>&1; then
+    SUDO="sudo"
+    info "当前是普通用户，使用 sudo 安装系统包"
   else
-    warn "未识别的 Linux 发行版，请手动确保已安装: git curl node clangd ripgrep fzf"
+    return 1                      # 既不是 root 又没 sudo
+  fi
+}
+
+install_linux_deps() {
+  if ! detect_privilege; then
+    warn "当前既非 root 又无 sudo，无法用系统包管理器安装依赖。"
+    warn "将尝试用户级降级方案 (见函数 install_user_level_deps)。"
+    install_user_level_deps
+    return
+  fi
+
+  if command -v apt-get >/dev/null 2>&1; then
+    info "通过 apt 安装依赖..."
+    $SUDO apt-get update -qq
+    $SUDO apt-get install -y git curl build-essential clangd ripgrep fzf
+    # node: 用系统包
+    command -v node >/dev/null 2>&1 || $SUDO apt-get install -y nodejs npm
+  elif command -v dnf >/dev/null 2>&1; then
+    $SUDO dnf install -y git curl clang-tools-extra ripgrep fzf nodejs npm
+  elif command -v yum >/dev/null 2>&1; then
+    $SUDO yum install -y git curl clang-tools-extra ripgrep fzf nodejs npm
+  elif command -v pacman >/dev/null 2>&1; then
+    $SUDO pacman -Sy --noconfirm git curl clang ripgrep fzf nodejs npm
+  elif command -v apk >/dev/null 2>&1; then
+    # Alpine (常见于 Docker 容器，且容器里通常就是 root)
+    $SUDO apk add --no-cache git curl clang-extra-tools ripgrep fzf nodejs npm build-base
+  elif command -v zypper >/dev/null 2>&1; then
+    $SUDO zypper install -y git curl clang-tools ripgrep fzf nodejs npm
+  else
+    warn "未识别的包管理器，请手动确保已安装: git curl node clangd ripgrep fzf"
+  fi
+}
+
+# 无 root 无 sudo 时的降级方案: 优先用 conda，其次提示手动
+install_user_level_deps() {
+  if command -v conda >/dev/null 2>&1; then
+    info "检测到 conda，尝试用 conda 安装到当前环境 (无需 root)..."
+    conda install -y -c conda-forge clangd nodejs ripgrep fzf || \
+      warn "conda 安装部分失败，请检查上面的输出"
+  else
+    err "无法自动安装系统依赖。请联系管理员安装，或自行用以下任一方式 (都不需要 root):"
+    echo "  • conda:  conda install -c conda-forge clangd nodejs ripgrep fzf"
+    echo "  • 预编译二进制: 把 clangd / node / rg / fzf 下载到 ~/bin 并加入 PATH"
+    echo "  脚本会继续部署 vim 配置，但 LSP/搜索功能在依赖装好前不可用。"
   fi
 }
 
