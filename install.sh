@@ -34,10 +34,10 @@ install_mac_deps() {
   if ! command -v brew >/dev/null 2>&1; then
     err "未找到 Homebrew。请先安装: https://brew.sh"; exit 1
   fi
+  # 注意: node 不在这里装，统一交给 nvm (见 ensure_node_via_nvm)
   local pkgs=()
   command -v git  >/dev/null 2>&1 || pkgs+=(git)
   command -v curl >/dev/null 2>&1 || pkgs+=(curl)
-  command -v node >/dev/null 2>&1 || pkgs+=(node)
   command -v rg   >/dev/null 2>&1 || pkgs+=(ripgrep)
   command -v fzf  >/dev/null 2>&1 || pkgs+=(fzf)
   # clangd: macOS 自带 /usr/bin/clangd (Apple)，若无则装 llvm
@@ -75,38 +75,39 @@ install_linux_deps() {
     return
   fi
 
+  # 注意: node 不在这里装，统一交给 nvm (见 ensure_node_via_nvm)，
+  # 因为发行版自带的 nodejs 往往太旧 (< 20)，会导致 coc 报 "crypto is not defined"。
   if command -v apt-get >/dev/null 2>&1; then
     info "通过 apt 安装依赖..."
     $SUDO apt-get update -qq
     $SUDO apt-get install -y git curl build-essential clangd ripgrep fzf
-    # node: 用系统包
-    command -v node >/dev/null 2>&1 || $SUDO apt-get install -y nodejs npm
   elif command -v dnf >/dev/null 2>&1; then
-    $SUDO dnf install -y git curl clang-tools-extra ripgrep fzf nodejs npm
+    $SUDO dnf install -y git curl clang-tools-extra ripgrep fzf
   elif command -v yum >/dev/null 2>&1; then
-    $SUDO yum install -y git curl clang-tools-extra ripgrep fzf nodejs npm
+    $SUDO yum install -y git curl clang-tools-extra ripgrep fzf
   elif command -v pacman >/dev/null 2>&1; then
-    $SUDO pacman -Sy --noconfirm git curl clang ripgrep fzf nodejs npm
+    $SUDO pacman -Sy --noconfirm git curl clang ripgrep fzf
   elif command -v apk >/dev/null 2>&1; then
     # Alpine (常见于 Docker 容器，且容器里通常就是 root)
-    $SUDO apk add --no-cache git curl clang-extra-tools ripgrep fzf nodejs npm build-base
+    $SUDO apk add --no-cache git curl clang-extra-tools ripgrep fzf build-base
   elif command -v zypper >/dev/null 2>&1; then
-    $SUDO zypper install -y git curl clang-tools ripgrep fzf nodejs npm
+    $SUDO zypper install -y git curl clang-tools ripgrep fzf
   else
-    warn "未识别的包管理器，请手动确保已安装: git curl node clangd ripgrep fzf"
+    warn "未识别的包管理器，请手动确保已安装: git curl clangd ripgrep fzf"
   fi
 }
 
 # 无 root 无 sudo 时的降级方案: 优先用 conda，其次提示手动
 install_user_level_deps() {
+  # node 仍由 nvm 负责，这里只补 clangd/ripgrep/fzf
   if command -v conda >/dev/null 2>&1; then
     info "检测到 conda，尝试用 conda 安装到当前环境 (无需 root)..."
-    conda install -y -c conda-forge clangd nodejs ripgrep fzf || \
+    conda install -y -c conda-forge clangd ripgrep fzf || \
       warn "conda 安装部分失败，请检查上面的输出"
   else
     err "无法自动安装系统依赖。请联系管理员安装，或自行用以下任一方式 (都不需要 root):"
-    echo "  • conda:  conda install -c conda-forge clangd nodejs ripgrep fzf"
-    echo "  • 预编译二进制: 把 clangd / node / rg / fzf 下载到 ~/bin 并加入 PATH"
+    echo "  • conda:  conda install -c conda-forge clangd ripgrep fzf"
+    echo "  • 预编译二进制: 把 clangd / rg / fzf 下载到 ~/bin 并加入 PATH"
     echo "  脚本会继续部署 vim 配置，但 LSP/搜索功能在依赖装好前不可用。"
   fi
 }
@@ -116,6 +117,58 @@ case "$OS" in
   Linux)  install_linux_deps ;;
   *) warn "未知系统 $OS，跳过依赖自动安装" ;;
 esac
+
+# ---------------------------------------------------------------------------
+# 1b. Node.js —— 始终用 nvm 安装/管理 (用户级，无需 root)
+#     coc.nvim 需要 Node 20+，否则会报 "crypto is not defined"。
+#     发行版自带的 nodejs 经常太旧，所以统一交给 nvm 来保证版本。
+# ---------------------------------------------------------------------------
+NODE_MIN_MAJOR=20          # coc.nvim 要求的最低主版本
+NODE_TARGET=20             # nvm 要安装的目标版本
+NVM_VERSION="v0.40.1"
+
+node_major() { node -v 2>/dev/null | sed 's/^v//; s/\..*//'; }
+
+load_nvm() {
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  # shellcheck disable=SC1090
+  [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+}
+
+ensure_node_via_nvm() {
+  # 已有满足要求的 node 就跳过 (例如 macOS 上 brew 的新版 node、或已装过 nvm)
+  if command -v node >/dev/null 2>&1 && [ "$(node_major)" -ge "$NODE_MIN_MAJOR" ] 2>/dev/null; then
+    ok "Node 版本满足要求: $(node -v)"
+    return
+  fi
+
+  if command -v node >/dev/null 2>&1; then
+    warn "当前 Node 版本过旧 ($(node -v))，coc.nvim 需要 >= v${NODE_MIN_MAJOR}。改用 nvm 安装新版。"
+  else
+    info "未检测到 Node，使用 nvm 安装 (无需 root)..."
+  fi
+
+  # 安装 nvm (若尚未安装)
+  load_nvm
+  if ! command -v nvm >/dev/null 2>&1; then
+    info "安装 nvm ${NVM_VERSION} ..."
+    curl -o- "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" | bash
+    load_nvm
+  fi
+
+  if ! command -v nvm >/dev/null 2>&1; then
+    err "nvm 安装失败 (可能是网络问题)。请手动安装 Node 20+ 后重新运行本脚本。"
+    return 1
+  fi
+
+  info "通过 nvm 安装 Node ${NODE_TARGET} ..."
+  nvm install "$NODE_TARGET"
+  nvm alias default "$NODE_TARGET"
+  nvm use default
+  ok "Node 就绪: $(node -v)  (npm $(npm -v))"
+}
+
+ensure_node_via_nvm
 
 # pyright (Python LSP) 通过 npm 全局安装；coc-pyright 也会自带，这里可选
 if command -v npm >/dev/null 2>&1; then

@@ -30,7 +30,8 @@ bash install.sh
 ```
 
 脚本会自动完成：
-- 检查并安装依赖（git / curl / node / clangd / ripgrep / fzf / pyright）
+- 检查并安装依赖（git / curl / clangd / ripgrep / fzf / pyright）
+- **始终用 nvm 安装 Node 20+**（用户级，无需 root；避免 coc 的 `crypto` 报错）
 - 备份你已有的 `~/.vimrc`（如果有的话，不会丢）
 - 安装插件管理器 vim-plug
 - 复制配置文件到 `~/.vimrc` 和 `~/.vim/coc-settings.json`
@@ -240,8 +241,19 @@ A: 在 vim 里执行 `:CocInstall coc-clangd coc-pyright`。
 **Q: 想看某个快捷键是怎么定义的？**
 A: 直接看 `~/.vimrc`，里面每个映射都有中文注释。
 
-**Q: 提示需要 node？**
-A: coc.nvim 依赖 Node.js。确认 `node --version` 可用（脚本会自动装）。
+**Q: 提示需要 node？/ 报 `crypto is not defined`？**
+A: coc.nvim 需要 **Node.js 20+**（旧版本缺少全局 `crypto` 会报这个错）。
+本脚本**始终用 nvm 安装/管理 Node**（用户级，无需 root），会自动装到 v20 并设为默认。
+若你是手动遇到此问题：
+```bash
+# 安装 nvm 并装 Node 20
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+nvm install 20 && nvm alias default 20
+```
+然后在 vim 里执行 `:CocRestart`。
+> 注意：nvm 是在你的 `~/.bashrc`/`~/.zshrc` 里生效的。新开终端才会自动加载 nvm；
+> 若 `node` 找不到，先 `source ~/.bashrc`（或重开终端）。
 
 **Q: 机器上只有 root、没有 `sudo` 命令（常见于 Docker 容器）？**
 A: 直接跑 `bash install.sh` 即可。脚本会自动检测权限：
@@ -252,33 +264,34 @@ A: 直接跑 `bash install.sh` 即可。脚本会自动检测权限：
 支持的包管理器：apt / dnf / yum / pacman / apk(Alpine) / zypper。
 
 **Q: 公司服务器既没 root 也没 sudo，怎么装依赖？**
-A: 推荐用 **conda**（不需要 root）：
+A: 推荐用 **conda**（不需要 root）装系统工具，Node 仍交给脚本里的 nvm：
 ```bash
-conda install -c conda-forge clangd nodejs ripgrep fzf
+conda install -c conda-forge clangd ripgrep fzf
 ```
-装好后再跑 `bash install.sh` 部署配置即可。脚本检测到 conda 也会自动这么做。
+装好后再跑 `bash install.sh` 部署配置即可。脚本检测到 conda 也会自动这么做，
+并用 nvm 装 Node 20+。
 
 ---
 
 ## 8. 卸载 / 恢复
 
-一键脚本在安装时**自动备份**了你原来的配置，文件名形如
-`~/.vimrc.backup-20260625-120000`。
-
-恢复旧配置：
+### 一键卸载（推荐）
 ```bash
-# 找到备份
-ls -la ~/.vimrc.backup-*
-# 恢复（把时间戳换成你的）
-mv ~/.vimrc.backup-20260625-120000 ~/.vimrc
+cd ~/vim-modern
+bash uninstall.sh
 ```
+脚本会：删除配置文件、插件、coc 数据；并询问是否**恢复**你安装前的
+`~/.vimrc` 备份。它**不会**动 node/nvm/clangd 等工具（可能被别的程序用），
+结尾会列出如需彻底清理的手动命令。
 
-彻底卸载本配置：
+### 手动卸载（如果你想自己来）
 ```bash
 rm -f ~/.vimrc
-rm -rf ~/.vim/plugged ~/.vim/autoload/plug.vim ~/.vim/coc-settings.json
-# coc 数据（可选）
-rm -rf ~/.config/coc
+rm -rf ~/.vim/plugged ~/.vim/autoload/plug.vim ~/.vim/coc-settings.json ~/.vim/undodir
+rm -rf ~/.config/coc            # coc 扩展数据
+# 恢复旧配置（把时间戳换成你的）：
+ls -la ~/.vimrc.backup-*
+mv ~/.vimrc.backup-20260625-120000 ~/.vimrc
 ```
 
 ---
