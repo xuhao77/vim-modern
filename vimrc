@@ -16,6 +16,36 @@ scriptencoding utf-8
 set nocompatible              " 关闭 vi 兼容，启用 vim 全部能力
 
 " ----------------------------------------------------------------------------
+" 0b. 让 coc.nvim 找到 node (尤其是用 nvm 安装时)
+"     nvm 装的 node 只有 source 了 nvm.sh 才会进 PATH。如果 vim 从没读过
+"     .bashrc 的环境启动 (GUI / cron / 某些 IDE 终端)，coc 就会报
+"     "node is not executable"。这里主动把 nvm 的 node 路径告诉 coc。
+" ----------------------------------------------------------------------------
+if !executable('node')
+  " 取 nvm default 别名指向的版本；没有 default 就取目录里最新的一个
+  let s:nvm_node = ''
+  let s:nvm_dir  = expand('$HOME/.nvm/versions/node')
+  if isdirectory(s:nvm_dir)
+    let s:alias = expand('$HOME/.nvm/alias/default')
+    if filereadable(s:alias)
+      let s:ver = trim(readfile(s:alias)[0])
+      " 别名可能写成 "20" 或 "v20.20.2"，做一次模糊匹配
+      let s:hit = glob(s:nvm_dir . '/v' . substitute(s:ver, '^v', '', '') . '*/bin/node', 0, 1)
+      if !empty(s:hit) | let s:nvm_node = s:hit[0] | endif
+    endif
+    if empty(s:nvm_node)
+      let s:all = sort(glob(s:nvm_dir . '/*/bin/node', 0, 1))
+      if !empty(s:all) | let s:nvm_node = s:all[-1] | endif
+    endif
+  endif
+  if !empty(s:nvm_node) && executable(s:nvm_node)
+    let g:coc_node_path = s:nvm_node
+    " 同时把 node 所在目录加进 $PATH，方便 coc 调用 npm/npx 等
+    let $PATH = fnamemodify(s:nvm_node, ':h') . ':' . $PATH
+  endif
+endif
+
+" ----------------------------------------------------------------------------
 " 1. 插件列表 (vim-plug)
 "    运行 :PlugInstall 安装，:PlugUpdate 更新
 " ----------------------------------------------------------------------------
@@ -45,6 +75,7 @@ Plug 'tpope/vim-commentary'                " gcc 注释一行，gc 注释选区
 Plug 'tpope/vim-surround'                  " 快速增删改包围符号 () [] "" 等
 Plug 'jiangmiao/auto-pairs'                " 自动补全括号引号
 Plug 'luochen1990/rainbow'                 " 彩虹括号
+Plug 'ojroques/vim-oscyank', {'branch': 'main'}  " 跨 SSH/容器 复制到本地剪贴板 (OSC52)
 
 " ---- 语法高亮 ----
 Plug 'sheerun/vim-polyglot'                " 一大批语言的语法包（含 Python/C++）
@@ -68,8 +99,8 @@ call plug#end()
 syntax enable
 filetype plugin indent on
 
-set number                   " 显示行号
-set relativenumber           " 相对行号（配合 5j / 3k 跳转很方便）
+set number                   " 显示行号（绝对行号）
+set norelativenumber         " 关闭相对行号：每行都显示真实的绝对行号
 set cursorline               " 高亮当前行
 set termguicolors            " 启用真彩色
 set background=dark
@@ -79,6 +110,34 @@ set showcmd                  " 右下角显示正在输入的命令
 set laststatus=2             " 总是显示状态栏
 set noshowmode               " 模式信息交给 airline 显示
 set signcolumn=yes
+" 长行/末屏放不下时，默认会整屏填满 '@'；改成尽量多显示，只在最后一行放 @@@。
+" 这解决“上下滚动时后面内容不显示、每行只有 @”的问题。
+set display=lastline
+
+" ---- 终端兼容: 关闭所有终端查询，避免命令行冒出 [B1E3] 之类乱码 ----
+" vim 启动/恢复时会向终端发查询(版本/颜色/光标位置等)。精简终端
+" (如 TERM=xterm 的容器) 不会正确吞掉这些回应，回应字符就被当成键盘
+" 输入回显到命令行，看起来是一串乱码。
+"
+" 为什么“有时才出现”: 回应是异步回来的——来得快(进入读键盘前)就被吞掉，
+" 来得慢(容器调度/管道延迟)就泄漏成乱码。同一配置因这几毫秒快慢而时有时无。
+" 清空这些 termcode 是从源头掐断: 不发查询 => 没有回应可泄漏，与快慢无关。
+set t_RV=                    " 终端版本查询 (启动乱码最常见元凶)
+set t_RB=                    " 背景色查询
+set t_RF=                    " 前景色查询
+set t_u7=                    " 光标位置查询 (ambiwidth 探测)
+set t_RC=                    " 真彩色能力查询
+set t_RS=                    " 同上一类
+set t_8u=                    " 终端 Unicode/键盘协议查询
+" 焦点事件: 切走/切回窗口、Ctrl-Z 挂起后 fg 恢复，会让 vim 重发查询并漏码。
+" 这正是“清掉启动查询后仍偶发”的元凶。容器里用不到焦点上报，一并关闭。
+set t_fe=                    " 焦点事件: 获得焦点
+set t_fd=                    " 焦点事件: 失去焦点
+" 关掉版本查询后，鼠标“能力自动探测”失效；手动指定 sgr 以保证
+" 宽窗口下鼠标点击/滚动定位正确(配合上面的 set mouse=a)。
+if !has('gui_running')
+  set ttymouse=sgr
+endif
 
 " 主题（gruvbox）。想换成 onedark 改成: colorscheme onedark
 let g:gruvbox_contrast_dark = 'medium'
@@ -116,7 +175,11 @@ set hidden                   " 允许有未保存改动时切换 buffer
 set updatetime=300           " 加快 coc 响应
 set timeoutlen=500           " 快捷键组合等待时间
 set mouse=a                  " 启用鼠标（新手友好）
-set clipboard=unnamed        " 与系统剪贴板共享
+" 剪贴板: 只有这个 vim 真编译了 +clipboard(同机有 X11/桌面时) 才用 unnamed，
+" 否则 set clipboard 是空转。容器/远程纯命令行环境下走下面的 OSC52 方案。
+if has('clipboard')
+  set clipboard=unnamed
+endif
 set splitright               " 垂直分屏在右边打开
 set splitbelow               " 水平分屏在下方打开
 set nobackup                 " coc 需要：关闭备份避免警告
@@ -155,6 +218,26 @@ nnoremap <leader>w :w<CR>
 nnoremap <leader>q :q<CR>
 " 空格+回车 清除搜索高亮
 nnoremap <leader><CR> :nohlsearch<CR>
+
+" ---- 复制到「本地」系统剪贴板 (OSC52，跨 SSH/容器有效) ----
+" 用法: 可视模式选中后按  <leader>y  ；普通模式 <leader>y + 动作(如 <leader>yy 整行)
+"   原理: vim 把内容用 OSC52 转义序列发给你的终端，由终端写进你本地电脑的剪贴板。
+"   不需要 +clipboard，也不需要 X11；前提是终端支持 OSC52
+"   (iTerm2 / 新版 Windows Terminal / kitty / wezterm / tmux 配好都支持)。
+let g:oscyank_silent = 1            " 复制后不弹提示
+nnoremap <leader>y <Plug>OSCYankOperator
+nnoremap <leader>yy <leader>y_
+vnoremap <leader>y <Plug>OSCYankVisual
+
+" 没有真·本地 clipboard 时，让常规的 y 也自动镜像到 OSC52，
+" 这样 yy / yiw 等顺手操作也能直接粘到本地电脑。有 +clipboard 则不打扰。
+if !has('clipboard')
+  augroup osc52_yank
+    autocmd!
+    autocmd TextYankPost * if v:event.operator is 'y' && v:event.regname is '' |
+          \ execute 'OSCYankRegister "' | endif
+  augroup END
+endif
 
 " ---- 窗口切换（Ctrl + hjkl 在分屏间跳）----
 nnoremap <C-h> <C-w>h

@@ -23,7 +23,7 @@ echo "======================================================="
 # ---------------------------------------------------------------------------
 # 0. 基本检查
 # ---------------------------------------------------------------------------
-command -v vim >/dev/null 2>&1 || { err "未找到 vim，请先安装 vim 8.2+ / 9.x"; exit 1; }
+command -v vim >/dev/null 2>&1 || { err "未找到 vim，请先安装 vim (脚本会在后面尝试升级到 9.2.0338+)"; exit 1; }
 VIM_VER="$(vim --version | head -1)"
 info "检测到: $VIM_VER"
 
@@ -119,6 +119,107 @@ case "$OS" in
 esac
 
 # ---------------------------------------------------------------------------
+# 1a. 确保 Vim 版本足够新 (顶栏鼠标点击需要 statusline_click，Vim 9.2.0338+)
+#     发行版自带的 vim 往往太旧 (Ubuntu 24.04 锁在 9.1.0016，apt 升不上去)，
+#     缺 statusline_click 时 airline 的 buffer 标签点不动。这里在版本不够时
+#     从 vim/vim 源码编译一个新版到用户目录 (~/.local)，不覆盖系统 vim。
+#
+#     关于剪贴板: 本配置的复制走 OSC52 插件 (vim-oscyank)，靠 vimrc 里
+#     `if !has('clipboard')` 的分支自动镜像 y 到本地剪贴板。所以这里
+#     **故意不编入 +clipboard/+X11** —— 一旦编进去 has('clipboard') 变 1，
+#     那段 OSC52 自动镜像就被关掉了，反而不符合预期。
+# ---------------------------------------------------------------------------
+VIM_MIN_PATCH=338          # 顶栏点击所需的最低 9.2 补丁号
+VIM_PREFIX="$HOME/.local"  # 源码编译安装到用户目录，无需写 /usr
+
+# 当前 vim 是否已支持顶栏点击 (statusline_click)。用 vim 自己判断最准，
+# 不去解析版本字符串 (补丁号格式各异，容易判错)。
+vim_supports_tabclick() {
+  vim -es -u NONE -N \
+    -c 'if has("statusline_click") || has("tablineat") | cquit 0 | else | cquit 1 | endif' \
+    </dev/null >/dev/null 2>&1
+}
+
+build_vim_from_source() {
+  # 编译依赖。Neovim 不在此列 —— 我们要的是新版 Vim 本身。
+  if [ "$OS" = "Darwin" ]; then
+    command -v brew >/dev/null 2>&1 && brew install ncurses >/dev/null 2>&1 || true
+  else
+    # 需要 root/sudo 才能装编译依赖；detect_privilege 已在前面设置好 $SUDO
+    if detect_privilege 2>/dev/null; then
+      if command -v apt-get >/dev/null 2>&1; then
+        $SUDO apt-get install -y git make gcc libncurses-dev >/dev/null 2>&1 || \
+          $SUDO apt-get install -y git make gcc libncurses5-dev >/dev/null 2>&1 || true
+      elif command -v dnf >/dev/null 2>&1; then
+        $SUDO dnf install -y git make gcc ncurses-devel >/dev/null 2>&1 || true
+      elif command -v yum >/dev/null 2>&1; then
+        $SUDO yum install -y git make gcc ncurses-devel >/dev/null 2>&1 || true
+      elif command -v pacman >/dev/null 2>&1; then
+        $SUDO pacman -Sy --noconfirm git make gcc ncurses >/dev/null 2>&1 || true
+      elif command -v apk >/dev/null 2>&1; then
+        $SUDO apk add --no-cache git make gcc musl-dev ncurses-dev >/dev/null 2>&1 || true
+      elif command -v zypper >/dev/null 2>&1; then
+        $SUDO zypper install -y git make gcc ncurses-devel >/dev/null 2>&1 || true
+      fi
+    else
+      warn "无 root/sudo，跳过编译依赖安装；若缺 ncurses-dev 编译会失败。"
+    fi
+  fi
+
+  local src="$HOME/.cache/vim-build"
+  info "获取 vim 源码到 $src (浅克隆)..."
+  rm -rf "$src"
+  if ! git clone --depth 1 https://github.com/vim/vim.git "$src" >/dev/null 2>&1; then
+    err "克隆 vim 源码失败 (网络问题?)，跳过升级，继续用现有 vim。"
+    return 1
+  fi
+
+  info "编译 Vim 到 $VIM_PREFIX (几分钟，请耐心)..."
+  # 不带 GUI / X11 / clipboard：保持 has('clipboard')==0 以走 OSC52 插件方案。
+  # 编入 python3 是为了将来需要 (coc 不依赖它，但有备无患)。
+  # 用 `|| rc=$?` 捕获返回码：否则子shell 失败会在 set -e 下直接终止整个脚本。
+  local rc=0
+  ( cd "$src" && \
+    ./configure --prefix="$VIM_PREFIX" \
+      --with-features=huge \
+      --enable-multibyte \
+      --enable-python3interp=dynamic \
+      --disable-gui \
+      --without-x \
+      >/dev/null 2>&1 && \
+    make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" >/dev/null 2>&1 && \
+    make install >/dev/null 2>&1 ) || rc=$?
+
+  if [ $rc -ne 0 ] || [ ! -x "$VIM_PREFIX/bin/vim" ]; then
+    err "Vim 编译失败。请检查是否缺少编译依赖 (gcc/make/ncurses-dev)。"
+    err "源码在 $src，可手动进入排查。继续用现有 vim。"
+    return 1
+  fi
+
+  # 确保新 vim 在 PATH 里。把 ~/.local/bin 写进 shell 启动文件 (若还没有)。
+  export PATH="$VIM_PREFIX/bin:$PATH"
+  for rc_file in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    [ -f "$rc_file" ] || continue
+    if ! grep -q '/.local/bin' "$rc_file" 2>/dev/null; then
+      printf '\n# 新版 Vim (源码编译) 优先\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc_file"
+    fi
+  done
+  ok "Vim 已升级: $("$VIM_PREFIX/bin/vim" --version | head -1)"
+  warn "新 vim 装在 $VIM_PREFIX/bin —— 若 'which vim' 仍指向旧版，请重开终端或 source 你的 shell 配置。"
+}
+
+ensure_modern_vim() {
+  if vim_supports_tabclick; then
+    ok "当前 Vim 已支持顶栏鼠标点击 (statusline_click)，无需升级"
+    return
+  fi
+  warn "当前 Vim 不支持顶栏鼠标点击 (需 Vim 9.2.0${VIM_MIN_PATCH}+)，将从源码编译升级。"
+  build_vim_from_source || warn "Vim 升级未完成，顶栏点击暂不可用；其余功能不受影响。"
+}
+
+ensure_modern_vim
+
+# ---------------------------------------------------------------------------
 # 1b. Node.js —— 始终用 nvm 安装/管理 (用户级，无需 root)
 #     coc.nvim 需要 Node 20+，否则会报 "crypto is not defined"。
 #     发行版自带的 nodejs 经常太旧，所以统一交给 nvm 来保证版本。
@@ -133,6 +234,9 @@ load_nvm() {
   export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
   # shellcheck disable=SC1090
   [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+  # nvm.sh 不存在是正常情况(还没装)，不能让函数返回非 0，
+  # 否则在 set -e 下会导致脚本静默退出。
+  return 0
 }
 
 ensure_node_via_nvm() {
